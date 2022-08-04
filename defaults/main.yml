@@ -1,0 +1,24 @@
+---
+wordpress_mariadb_user: wordpress
+wordpress_mariadb_password: i_am_bad
+wordpress_mariadb_encoding: "utf8mb4_general_ci"
+
+wordpress_database_name: wordpress
+wordpress_database_table_prefix: wp_
+
+wordpress_owner: apache
+wordpress_group: apache
+wordpress_dir_mode: 0700
+wordpress_file_mode: 0600
+
+wordpress_debug_mode: "false"
+
+wordpress_installation_directory: /var/www
+wordpress_server_name: localhost
+
+wordpress_admin_email: me@example.local
+wordpress_admin_password: wordpress
+wordpress_admin_username: admin
+
+wordpress_site_title: Wordpress
+wordpress_url: wordpress.local

@@ -1,0 +1,206 @@
+---
+- name: Get packages info
+  ansible.builtin.package_facts:
+    manager: auto
+
+- name: Install EPEL
+  ansible.builtin.dnf:
+    name: epel-release
+    state: present
+
+- name: Install Ansible requirements
+  ansible.builtin.package:
+    name:
+      - python3-libselinux
+      - python3-libsemanage
+      - python3-mysqlclient
+    state: latest
+
+- name: Install common PHP extensions with the package manager
+  ansible.builtin.package:
+    name:
+      - '@php:8.0'
+      - php-mysqlnd
+      - php-json
+      - php-mbstring
+      - php-xml
+      - php-gd
+      - php-pear
+      - php-devel
+      - php-pecl-zip
+      - php-intl
+    state: latest
+  notify: restart apache
+
+- name: Install Wordpress dependencies
+  ansible.builtin.package:
+    name:
+      - ImageMagick
+      - ImageMagick-devel
+      - unzip
+      - gcc
+      - cmake
+      - libicu
+      - libicu-devel
+      - libzip
+
+- name: Install common PHP extensions with pear
+  community.general.pear:
+    name: pecl/imagick
+    state: present
+  notify: restart apache
+
+- name: Enable modules
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/php.d/{{ item }}"
+    owner: root
+    group: root
+    mode: 0644
+  notify: restart php-fpm
+  with_items:
+    - "30-imagick.ini"
+
+- name: Set httpd_can_network_connect so that Nextcloud can check for updates
+  ansible.posix.seboolean:
+    name: httpd_can_network_connect
+    state: true
+    persistent: true
+  tags: notest
+
+- name: Check if Wordpress folder exists
+  ansible.builtin.stat:
+    path: /var/www/wordpress
+  register: wordpress_st
+
+- name: Download and extract Wordpress
+  ansible.builtin.unarchive:
+    src: https://wordpress.org/latest.tar.gz
+    dest: "{{ wordpress_installation_directory }}"
+    owner: "{{ wordpress_owner }}"
+    group: "{{ wordpress_group }}"
+    remote_src: true
+  when: not wordpress_st.stat.exists
+
+- name: Apply new SELinux file context to filesystem
+  ansible.builtin.command: restorecon -irv /var/www/wordpress
+  tags: notest
+
+- name: Get Wordpress directories
+  ansible.builtin.find:
+    path: "{{ wordpress_installation_directory }}/wordpress"
+    file_type: directory
+    recurse: true
+  register: wordpress_dirs
+
+- name: Set Wordpress directories rights
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: "{{ wordpress_owner }}"
+    group: "{{ wordpress_group }}"
+    mode: "{{ wordpress_dir_mode }}"
+  with_items: "{{ wordpress_dirs.files }}"
+  when: item.pw_name != wordpress_owner or item.gr_name != wordpress_group and item.mode != wordpress_dir_mode
+
+- name: Get Wordpress files
+  ansible.builtin.find:
+    path: "{{ wordpress_installation_directory }}/wordpress"
+    file_type: file
+    recurse: true
+  register: wordpress_files
+
+- name: Set Wordpress files rights
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: "{{ wordpress_owner }}"
+    group: "{{ wordpress_group }}"
+    mode: "{{ wordpress_file_mode }}"
+  with_items: "{{ wordpress_files.files }}"
+  when: item.pw_name != wordpress_owner or item.gr_name != wordpress_group and item.mode != wordpress_file_mode
+
+- name: Create Wordpress database
+  community.mysql.mysql_db:
+    name: "{{ wordpress_database_name }}"
+    encoding: "utf8mb4_general_ci"
+    state: present
+
+- name: Create Wordpress user
+  community.mysql.mysql_user:
+    name: "{{ wordpress_mariadb_user }}"
+    password: "{{ wordpress_mariadb_password }}"
+    priv: '{{ wordpress_database_name }}.*:SELECT,INSERT,UPDATE,DELETE,CREATE'
+    state: present
+
+- name: Define special characters
+  ansible.builtin.set_fact:
+    special_chars: "!#$%&()*+,~"
+
+- name: Create Wordpress keys and salt
+  ansible.builtin.set_fact:
+    wordpress_auth_key: "{{ lookup('community.general.random_string', length=64, override_special=special_chars) }}"
+    wordpress_secure_auth_key: "{{ lookup('community.general.random_string', length=64, override_special=special_chars) }}"
+    wordpress_logged_in_key: "{{ lookup('community.general.random_string', length=64, override_special=special_chars) }}"
+    wordpress_nonce_key: "{{ lookup('community.general.random_string', length=64, override_special=special_chars) }}"
+    wordpress_auth_key_salt: "{{ lookup('community.general.random_string', length=64, override_special=special_chars) }}"
+    wordpress_secure_auth_key_salt: "{{ lookup('community.general.random_string', length=64, override_special=special_chars) }}"
+    wordpress_logged_in_key_salt: "{{ lookup('community.general.random_string', length=64, override_special=special_chars) }}"
+    wordpress_nonce_key_salt: "{{ lookup('community.general.random_string', length=64, override_special=special_chars) }}"
+
+- name: Install wp-config.php file
+  ansible.builtin.template:
+    src: wp-config.php.j2
+    dest: "{{ wordpress_installation_directory }}/wp-config.php"
+    owner: "{{ wordpress_owner }}"
+    group: "{{ wordpress_group }}"
+    mode: 0600
+
+- name: Install Apache VHost
+  ansible.builtin.template:
+    src: wordpress_vhost.conf.j2
+    dest: /etc/httpd/conf.d/wordpress_vhost.conf
+    owner: root
+    group: root
+    mode: 0644
+  notify: restart apache
+
+- name: Allow apache to modify files in the Wordpress directory
+  community.general.sefcontext:
+    target: '/var/www/wordpress(/.*)?'
+    setype: httpd_sys_rw_content_t
+    state: present
+  tags: notest
+
+- name: Install WP-CLI
+  ansible.builtin.get_url:
+    url: https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+    dest: /usr/local/bin/wp
+    owner: root
+    group: root
+    mode: 0755
+
+- name: Create WP-CLI config directory
+  ansible.builtin.file:
+    state: directory
+    path: /home/ansible/.wp-cli
+    owner: root
+    group: root
+    mode: 0700
+
+- name: Check if Wordpress is already installed
+  ansible.builtin.command:
+    cmd: /usr/local/bin/wp core is-installed --path={{ wordpress_installation_directory }}/wordpress
+  register: wp_is_installed
+  become: true
+  changed_when: wp_is_installed.rc == 1
+  failed_when: wp_is_installed.rc > 1
+
+- name: Run the Wordpress installer
+  ansible.builtin.command:
+    cmd: >
+      /usr/local/bin/wp core install --path={{ wordpress_installation_directory }}/wordpress --prompt=admin-password
+      --title={{ wordpress_site_title }} --url={{ wordpress_url }}
+      --admin_user={{ wordpress_admin_username }} --admin_email={{ wordpress_admin_email }}
+    stdin: "{{ wordpress_admin_password }}"
+  changed_when: wp_is_installed.rc == 0
+  register: wp_install_result
+  when: wp_is_installed == 1
