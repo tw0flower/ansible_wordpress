@@ -11,5 +11,6 @@ galaxy_info:
     - 8
 
 dependencies:
-  - src: https://git.ankhmorpork.host/ansible/mariadb.git
-    scm: git
+  - name: https://git.ankhmorpork.host/ansible/mariadb.git
+    type: git
+    version: main
