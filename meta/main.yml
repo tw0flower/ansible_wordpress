@@ -1,0 +1,15 @@
+---
+galaxy_info:
+  role_name: wordpress
+  author: tw0flower
+  description: A role to install Wordpress.
+  license: BSD
+  min_ansible_version: 6.0
+  platorms:
+  - name: RHEL
+    versions:
+    - 8
+
+dependencies:
+  - src: https://git.ankhmorpork.host/ansible/mariadb.git
+    scm: git
